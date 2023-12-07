@@ -232,7 +232,7 @@ parser.add_argument('--eval-metric', default='top1', type=str, metavar='EVAL_MET
                     help='Best metric (default: "top1"')
 parser.add_argument('--tta', type=int, default=0, metavar='N',
                     help='Test/inference time augmentation (oversampling) factor. 0=None (default: 0)')
-parser.add_argument("--local_rank", default=0, type=int)
+# parser.add_argument("--local_rank", default=0, type=int)
 parser.add_argument('--use-multi-epochs-loader', action='store_true', default=False,
                     help='use the multi-epochs-loader to save time at the beginning of every epoch')
 
@@ -287,8 +287,8 @@ def main():
     args.rank = 0  # global rank
     if args.distributed:
         args.num_gpu = 1
-        args.device = 'cuda:%d' % args.local_rank
-        torch.cuda.set_device(args.local_rank)
+        args.device = 'cuda:%d' % int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
         args.world_size = torch.distributed.get_world_size()
         args.rank = torch.distributed.get_rank()
@@ -317,11 +317,11 @@ def main():
         checkpoint_path=args.initial_checkpoint,
         img_size=args.img_size)
 
-    if args.local_rank == 0:
+    if int(os.environ["LOCAL_RANK"]) == 0:
         _logger.info('Model %s created, param count: %d' %
                      (args.model, sum([m.numel() for m in model.parameters()])))
 
-    data_config = resolve_data_config(vars(args), model=model, verbose=args.local_rank == 0)
+    data_config = resolve_data_config(vars(args), model=model, verbose=int(os.environ["LOCAL_RANK"]) == 0)
 
     num_aug_splits = 0
     if args.aug_splits > 0:
@@ -366,15 +366,15 @@ def main():
     if use_amp == 'apex':
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
         loss_scaler = ApexScaler()
-        if args.local_rank == 0:
+        if int(os.environ["LOCAL_RANK"]) == 0:
             _logger.info('Using NVIDIA APEX AMP. Training in mixed precision.')
     elif use_amp == 'native':
         amp_autocast = torch.cuda.amp.autocast
         loss_scaler = NativeScaler()
-        if args.local_rank == 0:
+        if int(os.environ["LOCAL_RANK"]) == 0:
             _logger.info('Using native Torch AMP. Training in mixed precision.')
     else:
-        if args.local_rank == 0:
+        if int(os.environ["LOCAL_RANK"]) == 0:
             _logger.info('AMP not enabled. Training in float32.')
 
     # optionally resume from a checkpoint
@@ -384,7 +384,7 @@ def main():
             model, args.resume,
             optimizer=None if args.no_resume_opt else optimizer,
             loss_scaler=None if args.no_resume_opt else loss_scaler,
-            log_info=args.local_rank == 0)
+            log_info=int(os.environ["LOCAL_RANK"]) == 0)
 
     model_ema = None
     if args.model_ema:
@@ -404,7 +404,7 @@ def main():
                     model = convert_syncbn_model(model)
                 else:
                     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-                if args.local_rank == 0:
+                if int(os.environ["LOCAL_RANK"]) == 0:
                     _logger.info(
                         'Converted model to use Synchronized BatchNorm. WARNING: You may have issues if using '
                         'zero initialized BN layers (enabled by default for ResNets) while sync-bn enabled.')
@@ -412,13 +412,13 @@ def main():
                 _logger.error('Failed to enable Synchronized BatchNorm. Install Apex or Torch >= 1.1')
         if has_apex and use_amp != 'native':
             # Apex DDP preferred unless native amp is activated
-            if args.local_rank == 0:
+            if int(os.environ["LOCAL_RANK"]) == 0:
                 _logger.info("Using NVIDIA APEX DistributedDataParallel.")
             model = ApexDDP(model, delay_allreduce=True)
         else:
-            if args.local_rank == 0:
+            if int(os.environ["LOCAL_RANK"]) == 0:
                 _logger.info("Using native Torch DistributedDataParallel.")
-            model = NativeDDP(model, device_ids=[args.local_rank])  # can use device str in Torch >= 1.1
+            model = NativeDDP(model, device_ids=[int(os.environ["LOCAL_RANK"])])  # can use device str in Torch >= 1.1
         # NOTE: EMA model does not need to be wrapped by DDP
 
     lr_scheduler, num_epochs = create_scheduler(args, optimizer)
@@ -431,7 +431,7 @@ def main():
     if lr_scheduler is not None and start_epoch > 0:
         lr_scheduler.step(start_epoch)
 
-    if args.local_rank == 0:
+    if int(os.environ["LOCAL_RANK"]) == 0:
         _logger.info('Scheduled epochs: {}'.format(num_epochs))
 
     train_dir = os.path.join(args.data, 'train')
@@ -535,7 +535,7 @@ def main():
 
     saver = None
     output_dir = ''
-    if args.local_rank == 0:
+    if int(os.environ["LOCAL_RANK"]) == 0:
         output_base = args.output if args.output else './output'
         exp_name = '-'.join([
             datetime.now().strftime("%Y%m%d-%H%M%S"),
@@ -561,7 +561,7 @@ def main():
                 amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
 
             if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
-                if args.local_rank == 0:
+                if int(os.environ["LOCAL_RANK"]) == 0:
                     _logger.info("Distributing BatchNorm running means and vars")
                 distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
 
@@ -582,7 +582,7 @@ def main():
                 epoch, train_metrics, eval_metrics, os.path.join(output_dir, 'summary.csv'),
                 write_header=best_metric is None)
 
-            if saver is not None:
+            if saver is not None and epoch%10 == 0:
                 # save proper checkpoint with eval metric
                 save_metric = eval_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
@@ -656,7 +656,7 @@ def train_epoch(
                 reduced_loss = reduce_tensor(loss.data, args.world_size)
                 losses_m.update(reduced_loss.item(), input.size(0))
 
-            if args.local_rank == 0:
+            if int(os.environ["LOCAL_RANK"]) == 0:
                 _logger.info(
                     'Train: {} [{:>4d}/{} ({:>3.0f}%)]  '
                     'Loss: {loss.val:>9.6f} ({loss.avg:>6.4f})  '
@@ -745,7 +745,7 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
 
             batch_time_m.update(time.time() - end)
             end = time.time()
-            if args.local_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
+            if int(os.environ["LOCAL_RANK"]) == 0 and (last_batch or batch_idx % args.log_interval == 0):
                 log_name = 'Test' + log_suffix
                 _logger.info(
                     '{0}: [{1:>4d}/{2}]  '

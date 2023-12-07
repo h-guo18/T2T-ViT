@@ -11,6 +11,24 @@ import torch.nn as nn
 import numpy as np
 from timm.models.layers import DropPath
 
+def get_EF(input_size, dim, method="no_params", head_dim=None, bias=True):
+    """
+    Retuns the E or F matrix, initialized via xavier initialization.
+    This is the recommended way to do it according to the authors of the paper.
+    Includes a method for convolution, as well as a method for no additional params.
+    """
+    assert method == "learnable" or method == "convolution" or method == "no_params", "The method flag needs to be either 'learnable', 'convolution', or 'no_params'!"
+    if method == "convolution":
+        conv = nn.Conv1d(head_dim, head_dim, kernel_size=int(input_size/dim), stride=int(input_size/dim))
+        return conv
+    if method == "no_params":
+        mat = torch.zeros((input_size, dim))
+        torch.nn.init.normal_(mat, mean=0.0, std=1/dim)
+        return mat
+    lin = nn.Linear(input_size, dim, bias)
+    torch.nn.init.xavier_normal_(lin.weight)
+    return lin
+
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
@@ -41,12 +59,18 @@ class Attention(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
+        self.E_proj = nn.Parameter(get_EF(input_size=197, dim=64),requires_grad=False)
+        self.F_proj = nn.Parameter(get_EF(input_size=197, dim=64),requires_grad=False)
+        # self.linformer_E = torch.randn()
 
     def forward(self, x):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
-
+        q, k, v = qkv[0], qkv[1], qkv[2] #(B,H,N,D)3
+        # linformer_E = torch.rand((N,64)).to(x.device)
+        k = torch.einsum('bhnd,nk->bhkd',k,self.E_proj)
+        v = torch.einsum('bhnd,nk->bhkd',v,self.F_proj)
+        
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
