@@ -118,7 +118,7 @@ parser.add_argument('--decay-epochs', type=float, default=30, metavar='N',
                     help='epoch interval to decay LR')
 parser.add_argument('--warmup-epochs', type=int, default=10, metavar='N',
                     help='epochs to warmup LR, if scheduler supports')
-parser.add_argument('--cooldown-epochs', type=int, default=10, metavar='N',
+parser.add_argument('--cooldown-epochs', type=int, default=50, metavar='N',
                     help='epochs to cooldown LR at min_lr, after cyclic schedule ends')
 parser.add_argument('--patience-epochs', type=int, default=10, metavar='N',
                     help='patience epochs for Plateau LR scheduler (default: 10')
@@ -582,7 +582,7 @@ def main():
                 epoch, train_metrics, eval_metrics, os.path.join(output_dir, 'summary.csv'),
                 write_header=best_metric is None)
 
-            if saver is not None and epoch%10 == 0:
+            if saver is not None and epoch%100 == 0:
                 # save proper checkpoint with eval metric
                 save_metric = eval_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
