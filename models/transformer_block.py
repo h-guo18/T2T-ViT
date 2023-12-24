@@ -50,7 +50,7 @@ class Mlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,
-                 linformer=False,kernel_method=True,kernel_ratio=0.5):
+                 linformer=False,kernel_method=False,kernel_ratio=0.5):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
@@ -66,8 +66,14 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
         if self.linformer:
-            self.E_proj = nn.Parameter(get_EF(input_size=197, dim=64),requires_grad=False)
-            self.F_proj = nn.Parameter(get_EF(input_size=197, dim=64),requires_grad=False)
+            input_size= 197
+            linformer_dim = 64
+            
+            EF_proj = torch.zeros((2,self.head_dim,input_size, linformer_dim))
+            torch.nn.init.normal_(EF_proj, mean=0.0, std=1/linformer_dim)
+            self.E_proj = nn.Parameter(EF_proj[0],requires_grad=False)
+            self.F_proj = nn.Parameter(EF_proj[1],requires_grad=False) #(H,N,D)
+            
         if self.kernel:
             self.m = int(dim * kernel_ratio)
             self.w = torch.randn(self.num_heads,self.m, self.head_dim)
@@ -94,8 +100,8 @@ class Attention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2] #(B,H,N,D)3
         if self.linformer:
-            k = torch.einsum('bhnd,nk->bhkd',k,self.E_proj)
-            v = torch.einsum('bhnd,nk->bhkd',v,self.F_proj)
+            k = torch.einsum('bhnd,hnk->bhkd',k,self.E_proj)
+            v = torch.einsum('bhnd,hnk->bhkd',v,self.F_proj)
         
         if self.kernel:
             kp, qp = self.prm_exp(k), self.prm_exp(q)
@@ -116,12 +122,11 @@ class Attention(nn.Module):
 class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm,linformer=False):
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop,
-            linformer=linformer)
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
