@@ -12,23 +12,23 @@ import torch.nn as nn
 import numpy as np
 from timm.models.layers import DropPath
 
-def get_EF(input_size, dim, method="no_params", head_dim=None, bias=True):
-    """
-    Retuns the E or F matrix, initialized via xavier initialization.
-    This is the recommended way to do it according to the authors of the paper.
-    Includes a method for convolution, as well as a method for no additional params.
-    """
-    assert method == "learnable" or method == "convolution" or method == "no_params", "The method flag needs to be either 'learnable', 'convolution', or 'no_params'!"
-    if method == "convolution":
-        conv = nn.Conv1d(head_dim, head_dim, kernel_size=int(input_size/dim), stride=int(input_size/dim))
-        return conv
-    if method == "no_params":
-        mat = torch.zeros((input_size, dim))
-        torch.nn.init.normal_(mat, mean=0.0, std=1/dim)
-        return mat
-    lin = nn.Linear(input_size, dim, bias)
-    torch.nn.init.xavier_normal_(lin.weight)
-    return lin
+# def get_EF(input_size, dim, method="no_params", head_dim=None, bias=True):
+#     """
+#     Retuns the E or F matrix, initialized via xavier initialization.
+#     This is the recommended way to do it according to the authors of the paper.
+#     Includes a method for convolution, as well as a method for no additional params.
+#     """
+#     assert method == "learnable" or method == "convolution" or method == "no_params", "The method flag needs to be either 'learnable', 'convolution', or 'no_params'!"
+#     if method == "convolution":
+#         conv = nn.Conv1d(head_dim, head_dim, kernel_size=int(input_size/dim), stride=int(input_size/dim))
+#         return conv
+#     if method == "no_params":
+#         mat = torch.zeros((input_size, dim))
+#         torch.nn.init.normal_(mat, mean=0.0, std=1/dim)
+#         return mat
+#     lin = nn.Linear(input_size, dim, bias)
+#     torch.nn.init.xavier_normal_(lin.weight)
+#     return lin
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -50,11 +50,10 @@ class Mlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,
-                 linformer=False,kernel_method=False,kernel_ratio=0.5):
+                 linformer=True,kernel_method=False,kernel_ratio=0.5):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.dim=dim
         self.epsilon = 1e-8  # for stable in division
         self.kernel=kernel_method
         self.linformer=linformer
@@ -69,13 +68,13 @@ class Attention(nn.Module):
             input_size= 197
             linformer_dim = 64
             
-            EF_proj = torch.zeros((2,self.head_dim,input_size, linformer_dim))
+            EF_proj = torch.zeros((2,self.num_heads,input_size, linformer_dim))
             torch.nn.init.normal_(EF_proj, mean=0.0, std=1/linformer_dim)
             self.E_proj = nn.Parameter(EF_proj[0],requires_grad=False)
             self.F_proj = nn.Parameter(EF_proj[1],requires_grad=False) #(H,N,D)
             
         if self.kernel:
-            self.m = int(dim * kernel_ratio)
+            self.m = int(self.head_dim * kernel_ratio)
             self.w = torch.randn(self.num_heads,self.m, self.head_dim)
             self.w = nn.Parameter(nn.init.orthogonal_(self.w) * math.sqrt(self.m), requires_grad=False)
         # self.linformer_E = torch.randn()
