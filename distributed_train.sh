@@ -6,5 +6,5 @@
 # All rights reserved.
 NUM_PROC=$1
 shift
-torchrun  --nproc_per_node=$NUM_PROC --rdzv-backend=c10d --rdzv-endpoint=localhost:29600 main.py "$@" 
+torchrun  --nproc_per_node=$NUM_PROC --rdzv-backend=c10d --rdzv-endpoint=localhost:29500 main.py "$@" 
 

@@ -10,6 +10,7 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
+from einops import rearrange, repeat
 from timm.models.layers import DropPath
 
 # def get_EF(input_size, dim, method="no_params", head_dim=None, bias=True):
@@ -29,6 +30,22 @@ from timm.models.layers import DropPath
 #     lin = nn.Linear(input_size, dim, bias)
 #     torch.nn.init.xavier_normal_(lin.weight)
 #     return lin
+
+def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel_epsilon = 0.001, normalize_data = True, device = None):
+
+    data_normalizer = (data.shape[-1] ** -0.25) if normalize_data else 1.
+    if projection_matrix is None:
+        return kernel_fn(data_normalizer * data) + kernel_epsilon
+    #projection_matrix : (h,m,d_head)
+    # projection = repeat(projection_matrix, 'j d -> b h j d', b = b, h = h)
+    # projection = projection.type_as(data)
+
+    # data_dash = torch.einsum('...id,...jd->...ij', (data_normalizer * data), projection)
+    data_dash = torch.einsum('bhni,hmi->bhnm',data_normalizer*data, projection_matrix)
+
+    data_prime = kernel_fn(data_dash) + kernel_epsilon
+    return data_prime.type_as(data)
+
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -50,7 +67,7 @@ class Mlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,
-                 linformer=True,kernel_method=False,kernel_ratio=0.5):
+                 linformer=False,kernel_method='relu',kernel_ratio=0.5,input_size=197):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
@@ -65,15 +82,15 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
         if self.linformer:
-            input_size= 197
+            input_size= input_size
             linformer_dim = 64
             
-            EF_proj = torch.zeros((2,self.num_heads,input_size, linformer_dim))
+            EF_proj = torch.zeros((2,input_size, linformer_dim))
             torch.nn.init.normal_(EF_proj, mean=0.0, std=1/linformer_dim)
             self.E_proj = nn.Parameter(EF_proj[0],requires_grad=False)
             self.F_proj = nn.Parameter(EF_proj[1],requires_grad=False) #(H,N,D)
             
-        if self.kernel:
+        if self.kernel is not None:
             self.m = int(self.head_dim * kernel_ratio)
             self.w = torch.randn(self.num_heads,self.m, self.head_dim)
             self.w = nn.Parameter(nn.init.orthogonal_(self.w) * math.sqrt(self.m), requires_grad=False)
@@ -99,11 +116,14 @@ class Attention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2] #(B,H,N,D)3
         if self.linformer:
-            k = torch.einsum('bhnd,hnk->bhkd',k,self.E_proj)
-            v = torch.einsum('bhnd,hnk->bhkd',v,self.F_proj)
+            k = torch.einsum('bhnd,nk->bhkd',k,self.E_proj)
+            v = torch.einsum('bhnd,nk->bhkd',v,self.F_proj)
         
-        if self.kernel:
-            kp, qp = self.prm_exp(k), self.prm_exp(q)
+        if self.kernel is not None:
+            if self.kernel == 'softmax':
+                kp, qp = self.prm_exp(k), self.prm_exp(q)
+            elif self.kernel == 'relu':
+                kp, qp =generalized_kernel(k,projection_matrix=self.w), generalized_kernel(q,projection_matrix=self.w)
             D = torch.einsum('bhni,bhi->bhn', qp, kp.sum(dim=2)).unsqueeze(dim=3)  # (B, H, N,m) * (B, H, m) -> (B, H,N, 1)
             kptv = torch.einsum('bhid,bhim->bhdm', v.float(), kp)  # (B, H, D,m)
             x = torch.einsum('bhni,bhdi->bhnd', qp, kptv) / (D.repeat(1, 1, 1, self.head_dim) + self.epsilon)  # (B, H, N, D)/Diag
@@ -121,11 +141,12 @@ class Attention(nn.Module):
 class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm,
+                 input_size=197):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop,input_size=input_size)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)

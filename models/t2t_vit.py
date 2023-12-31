@@ -105,7 +105,8 @@ class T2T_module(nn.Module):
 class T2T_ViT(nn.Module):
     def __init__(self, img_size=224, tokens_type='performer', in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
-                 drop_path_rate=0., norm_layer=nn.LayerNorm, token_dim=64):
+                 drop_path_rate=0., norm_layer=nn.LayerNorm, token_dim=64,
+                 attn_input_size=197):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
@@ -116,13 +117,15 @@ class T2T_ViT(nn.Module):
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(data=get_sinusoid_encoding(n_position=num_patches + 1, d_hid=embed_dim), requires_grad=False)
+        # self.pos_embed = nn.Parameter(data=get_sinusoid_encoding(n_position=attn_input_size, d_hid=embed_dim), requires_grad=False)
+        
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.ModuleList([
             Block(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,input_size=attn_input_size)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
 
@@ -155,12 +158,10 @@ class T2T_ViT(nn.Module):
     def forward_features(self, x):
         B = x.shape[0]
         x = self.tokens_to_token(x)
-
         cls_tokens = self.cls_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
         x = x + self.pos_embed
         x = self.pos_drop(x)
-
         for blk in self.blocks:
             x = blk(x)
 
@@ -168,6 +169,7 @@ class T2T_ViT(nn.Module):
         return x[:, 0]
 
     def forward(self, x):
+        #x:(B,C,L,L)(1024,3,224,224)
         x = self.forward_features(x)
         x = self.head(x)
         return x
