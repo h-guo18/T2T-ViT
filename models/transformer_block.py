@@ -12,6 +12,7 @@ import torch.nn as nn
 import numpy as np
 from einops import rearrange, repeat
 from timm.models.layers import DropPath
+from efficient_attention import AttentionFactory
 
 # def get_EF(input_size, dim, method="no_params", head_dim=None, bias=True):
 #     """
@@ -145,10 +146,23 @@ class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm,
-                 input_size=197):
+                 input_size=197,eva=False):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        self.attn = Attention(
+        if eva:
+            attn_args = {
+            # **vars(args.attn_specific_args),
+            **{
+            'dim': dim, 
+            'num_heads': num_heads, 
+            'qkv_bias': qkv_bias, 
+            'attn_drop': attn_drop, 
+            'proj_drop': 0.,
+            }
+        }
+            self.attn = AttentionFactory.build_attention(attn_name = 'eva', attn_args = attn_args)
+        else:
+            self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop,input_size=input_size)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
