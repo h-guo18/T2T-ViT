@@ -12,7 +12,7 @@ import torch.nn as nn
 import numpy as np
 from einops import rearrange, repeat
 from timm.models.layers import DropPath
-from efficient_attention import AttentionFactory
+# from efficient_attention import AttentionFactory
 
 # def get_EF(input_size, dim, method="no_params", head_dim=None, bias=True):
 #     """
@@ -68,7 +68,7 @@ class Mlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,
-                 linformer=False,kernel_method='rnn',kernel_ratio=0.5,input_size=197):
+                 linformer=False,kernel_method=None,kernel_ratio=0.5,input_size=197):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
@@ -149,21 +149,21 @@ class Block(nn.Module):
                  input_size=197,eva=False):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        if eva:
-            attn_args = {
-            # **vars(args.attn_specific_args),
-            **{
-            'dim': dim, 
-            'num_heads': num_heads, 
-            'qkv_bias': qkv_bias, 
-            'attn_drop': attn_drop, 
-            'proj_drop': 0.,
-            }
-        }
-            self.attn = AttentionFactory.build_attention(attn_name = 'eva', attn_args = attn_args)
-        else:
-            self.attn = Attention(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop,input_size=input_size)
+        # if eva:
+        #     attn_args = {
+        #     # **vars(args.attn_specific_args),
+        #     **{
+        #     'dim': dim, 
+        #     'num_heads': num_heads, 
+        #     'qkv_bias': qkv_bias, 
+        #     'attn_drop': attn_drop, 
+        #     'proj_drop': 0.,
+        #     }
+        # }
+        #     self.attn = AttentionFactory.build_attention(attn_name = 'eva', attn_args = attn_args)
+        # else:
+        self.attn = Attention(
+        dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop,input_size=input_size)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
