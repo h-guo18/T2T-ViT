@@ -88,8 +88,10 @@ class Attention(nn.Module):
             
             EF_proj = torch.zeros((2,input_size, linformer_dim))
             torch.nn.init.normal_(EF_proj, mean=0.0, std=1/linformer_dim)
-            self.E_proj = nn.Parameter(EF_proj[0],requires_grad=False)
-            self.F_proj = nn.Parameter(EF_proj[1],requires_grad=False) #(H,N,D)
+            self.E_proj = nn.Linear(input_size, linformer_dim,bias=False)
+            self.F_proj = nn.Linear(input_size, linformer_dim,bias=False)
+            # self.E_proj = nn.Parameter(EF_proj[0],requires_grad=False)
+            # self.F_proj = nn.Parameter(EF_proj[1],requires_grad=False) #(H,N,D)
             
         if self.kernel is not None:
             self.m = int(self.head_dim * kernel_ratio)
@@ -117,8 +119,10 @@ class Attention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2] #(B,H,N,D)3
         if self.linformer:
-            k = torch.einsum('bhnd,nk->bhkd',k,self.E_proj)
-            v = torch.einsum('bhnd,nk->bhkd',v,self.F_proj)
+            # k = torch.einsum('bhnd,nk->bhkd',k,self.E_proj)
+            # v = torch.einsum('bhnd,nk->bhkd',v,self.F_proj)
+            k=self.E_proj(k)
+            v=self.F_proj(v)
         
         if self.kernel is not None:
             if self.kernel == 'softmax':
