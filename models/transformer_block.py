@@ -68,7 +68,7 @@ class Mlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,
-                 linformer=False,kernel_method=None,kernel_ratio=0.5,input_size=197):
+                 linformer=True,kernel_method='rnn',kernel_ratio=0.5,input_size=197):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
@@ -126,8 +126,8 @@ class Attention(nn.Module):
             elif self.kernel == 'relu':
                 kp, qp =generalized_kernel(k,projection_matrix=self.w), generalized_kernel(q,projection_matrix=self.w)
             elif self.kernel == 'rnn':
-                kp =generalized_kernel(k,projection_matrix=None,kernel_fn= lambda x: (nn.functional.elu(x) + 1))
-                qp = generalized_kernel(q,projection_matrix=None,kernel_fn= lambda x: (nn.functional.elu(x) + 1))
+                kp =generalized_kernel(k,projection_matrix=None,kernel_fn= lambda x: (nn.ELU()(x) + 1))
+                qp = generalized_kernel(q,projection_matrix=None,kernel_fn= lambda x: (nn.ELU()(x) + 1))
             D = torch.einsum('bhni,bhi->bhn', qp, kp.sum(dim=2)).unsqueeze(dim=3)  # (B, H, N,m) * (B, H, m) -> (B, H,N, 1)
             kptv = torch.einsum('bhid,bhim->bhdm', v.float(), kp)  # (B, H, D,m)
             x = torch.einsum('bhni,bhdi->bhnd', qp, kptv) / (D.repeat(1, 1, 1, self.head_dim) + self.epsilon)  # (B, H, N, D)/Diag
