@@ -12,7 +12,7 @@ import torch.nn as nn
 import numpy as np
 from einops import rearrange, repeat
 from timm.models.layers import DropPath
-# from efficient_attention import AttentionFactory
+from .efficient_attention import AttentionFactory
 
 # def get_EF(input_size, dim, method="no_params", head_dim=None, bias=True):
 #     """
@@ -68,7 +68,7 @@ class Mlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,
-                 linformer=True,kernel_method='rnn',kernel_ratio=0.5,input_size=197):
+                 linformer=False,kernel_method=None,kernel_ratio=0.5,input_size=197):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
@@ -90,13 +90,14 @@ class Attention(nn.Module):
             torch.nn.init.normal_(EF_proj, mean=0.0, std=1/linformer_dim)
             self.E_proj = nn.Linear(input_size, linformer_dim,bias=False)
             self.F_proj = nn.Linear(input_size, linformer_dim,bias=False)
+            # self.post_proj_ln = nn.LayerNorm(self.head_dim)
             # self.E_proj = nn.Parameter(EF_proj[0],requires_grad=False)
             # self.F_proj = nn.Parameter(EF_proj[1],requires_grad=False) #(H,N,D)
             
-        if self.kernel is not None:
-            self.m = int(self.head_dim * kernel_ratio)
-            self.w = torch.randn(self.num_heads,self.m, self.head_dim)
-            self.w = nn.Parameter(nn.init.orthogonal_(self.w) * math.sqrt(self.m), requires_grad=False)
+        # if self.kernel is not None:
+        #     self.m = int(self.head_dim * kernel_ratio)
+        #     self.w = torch.randn(self.num_heads,self.m, self.head_dim)
+        #     self.w = nn.Parameter(nn.init.orthogonal_(self.w) * math.sqrt(self.m), requires_grad=False)
         # self.linformer_E = torch.randn()
         
     def prm_exp(self, x):
@@ -119,20 +120,28 @@ class Attention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2] #(B,H,N,D)3
         if self.linformer:
-            # k = torch.einsum('bhnd,nk->bhkd',k,self.E_proj)
-            # v = torch.einsum('bhnd,nk->bhkd',v,self.F_proj)
-            k=self.E_proj(k)
-            v=self.F_proj(v)
+            k=self.E_proj(torch.transpose(k,2,3))
+            k = torch.transpose(k,2,3)
+            # k = self.post_proj_ln(k)
+            v=self.F_proj(torch.transpose(v,2,3))
+            v=torch.transpose(v,2,3)
+            # v = self.post_proj_ln(v)
+            
         
         if self.kernel is not None:
             if self.kernel == 'softmax':
                 kp, qp = self.prm_exp(k), self.prm_exp(q)
             elif self.kernel == 'relu':
-                kp, qp =generalized_kernel(k,projection_matrix=self.w), generalized_kernel(q,projection_matrix=self.w)
+                kp, qp =generalized_kernel(k,projection_matrix=None), generalized_kernel(q,projection_matrix=None)
             elif self.kernel == 'rnn':
                 kp =generalized_kernel(k,projection_matrix=None,kernel_fn= lambda x: (nn.ELU()(x) + 1))
                 qp = generalized_kernel(q,projection_matrix=None,kernel_fn= lambda x: (nn.ELU()(x) + 1))
             D = torch.einsum('bhni,bhi->bhn', qp, kp.sum(dim=2)).unsqueeze(dim=3)  # (B, H, N,m) * (B, H, m) -> (B, H,N, 1)
+            # if self.linformer:
+            #     k=self.E_proj(torch.transpose(k,2,3))
+            #     k = torch.transpose(k,2,3)
+            #     v=self.F_proj(torch.transpose(v,2,3))
+            #     v=torch.transpose(v,2,3)
             kptv = torch.einsum('bhid,bhim->bhdm', v.float(), kp)  # (B, H, D,m)
             x = torch.einsum('bhni,bhdi->bhnd', qp, kptv) / (D.repeat(1, 1, 1, self.head_dim) + self.epsilon)  # (B, H, N, D)/Diag
             x = x.reshape(B,N,C)
@@ -150,24 +159,24 @@ class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm,
-                 input_size=197,eva=False):
+                 input_size=197,eva=True):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        # if eva:
-        #     attn_args = {
-        #     # **vars(args.attn_specific_args),
-        #     **{
-        #     'dim': dim, 
-        #     'num_heads': num_heads, 
-        #     'qkv_bias': qkv_bias, 
-        #     'attn_drop': attn_drop, 
-        #     'proj_drop': 0.,
-        #     }
-        # }
-        #     self.attn = AttentionFactory.build_attention(attn_name = 'eva', attn_args = attn_args)
-        # else:
-        self.attn = Attention(
-        dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop,input_size=input_size)
+        if eva:
+            attn_args = {
+            # **vars(args.attn_specific_args),
+            **{
+            'dim': dim, 
+            'num_heads': num_heads, 
+            'qkv_bias': qkv_bias, 
+            'attn_drop': attn_drop, 
+            'proj_drop': 0.,
+            }
+        }
+            self.attn = AttentionFactory.build_attention(attn_name = 'eva', attn_args = attn_args)
+        else:
+            self.attn = Attention(
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop,input_size=input_size)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
